@@ -1,0 +1,101 @@
+import logging
+import time
+
+import pendulum
+from airflow import DAG
+from airflow.decorators import task
+from config_const import ConfigConst
+from lib import ConnectionBuilder
+
+from dds.models.user_loader import UserLoader
+from dds.models.restaurant_loader import RestaurantLoader
+from dds.models.timestamp_loader import TimestampLoader
+from dds.models.product_loader import ProductLoader
+from dds.models.order_loader import OrderLoader
+from dds.models.fct_products_loader import FctProductsLoader
+
+from dds.dds_settings_repository import DdsEtlSettingsRepository
+
+
+log = logging.getLogger(__name__)
+
+with DAG(
+    dag_id='dds_dag',
+    schedule_interval='0/15 * * * *',
+    start_date=pendulum.datetime(2022, 5, 5, tz="UTC"),
+    catchup=False,
+    tags=['raw', 'dds'],
+    is_paused_upon_creation=False
+) as dag:
+    dwh_pg_connect = ConnectionBuilder.pg_conn(ConfigConst.PG_WAREHOUSE_CONNECTION)
+
+    settings_repository = DdsEtlSettingsRepository()
+    
+    @task(task_id="Connect")
+    def Connect():
+        time.sleep(1)
+    
+    @task(task_id="dm_users_load")
+    def dm_users_load(ds=None, **kwargs):
+        user_loader = UserLoader(dwh_pg_connect, settings_repository)
+        user_loader.load_users()
+
+    @task(task_id="dm_restaurants_load")
+    def dm_restaurants_load(ds=None, **kwargs):
+        restaurant_loader = RestaurantLoader(dwh_pg_connect, settings_repository)
+        restaurant_loader.load_restaurants()
+    
+    @task(task_id="dm_timestamps_load")
+    def dm_timestamps_load(ds=None, **kwargs):
+        ts_loader = TimestampLoader(dwh_pg_connect, settings_repository)
+        ts_loader.load_timestamps()
+    
+    @task(task_id="dm_products_load")
+    def dm_products_load(ds=None, **kwargs):
+        prod_loader = ProductLoader(dwh_pg_connect, settings_repository)
+        prod_loader.load_products()
+    
+    @task(task_id="dm_orders_load")
+    def dm_orders_load(ds=None, **kwargs):
+        order_loader = OrderLoader(dwh_pg_connect, settings_repository)
+        order_loader.load_orders()
+    
+    @task(task_id="fct_order_products_load")
+    def fct_order_products_load(ds=None, **kwargs):
+        fct_loader = FctProductsLoader(dwh_pg_connect, settings_repository)
+        fct_loader.load_product_facts()
+    
+
+
+    dm_users = dm_users_load()
+    dm_users # type: ignore
+    
+    dm_restaurants = dm_restaurants_load()
+    dm_restaurants # type: ignore
+    
+    dm_timestamps = dm_timestamps_load()
+    dm_timestamps # type: ignore
+    
+    dm_products = dm_products_load()
+    dm_products # type: ignore
+    
+    dm_connect = Connect()
+    dm_connect # type: ignore
+    
+    dm_orders = dm_orders_load()
+    dm_orders # type: ignore
+    
+    fct_order_products = fct_order_products_load()
+    fct_order_products # type: ignore
+    
+    
+    dm_restaurants>>dm_connect # type: ignore
+    dm_timestamps>>dm_connect # type: ignore
+    dm_users>>dm_connect # type: ignore
+    
+    dm_connect >> dm_products # type: ignore
+    dm_connect >> dm_orders # type: ignore
+    
+    dm_products >> fct_order_products # type: ignore
+    dm_orders >> fct_order_products # type: ignore
+
